@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="X509_2019">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/../Faks/ZP/projekat/X509_2019.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
