@@ -2,14 +2,14 @@ package implementation;
 
 import code.GuiException;
 
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.security.*;
+import java.security.cert.*;
 import java.security.cert.Certificate;
-import java.security.cert.CertificateException;
 import java.util.Enumeration;
+
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.util.io.pem.PemWriter;
 
 public class MyCode extends x509.v3.CodeV3 {
 
@@ -121,6 +121,7 @@ public class MyCode extends x509.v3.CodeV3 {
             blaKS.setKeyEntry(s,key,s2.toCharArray(),certificates);
             FileOutputStream fos = new FileOutputStream(s1);
             blaKS.store(fos, s2.toCharArray());
+            return true;
         } catch (KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException | IOException | CertificateException e) {
             e.printStackTrace();
             access.reportError(e);
@@ -131,11 +132,73 @@ public class MyCode extends x509.v3.CodeV3 {
 
     @Override
     public boolean importCertificate(String s, String s1) {
+
+        InputStream inStream = null;
+        try {
+            inStream = new FileInputStream(s);
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            X509Certificate cert = (X509Certificate)cf.generateCertificate(inStream);
+            ks.setCertificateEntry(s1,cert);
+            updateKeyStoreFile();
+            return true;
+        } catch (FileNotFoundException | CertificateException | KeyStoreException e) {
+            e.printStackTrace();
+            access.reportError(e);
+        } finally {
+            if (inStream != null) {
+                try {
+                    inStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    access.reportError(e);
+                }
+            }
+        }
         return false;
     }
 
     @Override
     public boolean exportCertificate(String s, String s1, int i, int i1) {
+        try {
+            if (i1 == 0) { //head only
+                X509Certificate certificate = (X509Certificate) ks.getCertificate(s1);
+                if (i == 0) {  //DER encoding
+                    FileOutputStream fos = new FileOutputStream(new File(s + ".cer"));
+                    fos.write(certificate.getEncoded());
+                    fos.flush();
+                    fos.close();
+                } else {    //PEM encoding
+                    JcaPEMWriter pemWriter = new JcaPEMWriter (new FileWriter(s + ".cer"));
+                    pemWriter.writeObject(certificate);
+                    pemWriter.flush();
+                    pemWriter.close();
+                }
+            } else { //whole chain
+                X509Certificate[] certificates = (X509Certificate[]) ks.getCertificateChain(s1);
+                if (i == 0) {   //DER encoding
+                    FileOutputStream fos = new FileOutputStream(new File(s + ".cer"));
+                    int j = 0;
+                    while (j != certificates.length) {
+                        fos.write(certificates[j].getEncoded());
+                        j++;
+                    }
+                    fos.flush();
+                    fos.close();
+                } else {    //PEM encoding
+                    JcaPEMWriter pemWriter = new JcaPEMWriter(new FileWriter(s + ".cer"));
+                    int j = 0;
+                    while (j != certificates.length){
+                        pemWriter.writeObject(certificates[j]);
+                        j++;
+                    }
+                    pemWriter.flush();
+                    pemWriter.close();
+                }
+            }
+            return true;
+        } catch (KeyStoreException | CertificateEncodingException | IOException e) {
+            e.printStackTrace();
+        }
         return false;
     }
 
