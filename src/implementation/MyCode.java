@@ -9,6 +9,7 @@ import java.security.cert.*;
 import java.security.cert.Certificate;
 import java.security.interfaces.DSAPublicKey;
 import java.security.spec.DSAPublicKeySpec;
+import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.text.DateFormat;
@@ -25,16 +26,23 @@ import org.bouncycastle.asn1.x500.X500NameBuilder;
 import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.ECNamedCurveTable;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.pkcs.PKCS10CertificationRequest;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequest;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
+import org.bouncycastle.util.io.pem.PemReader;
 import org.bouncycastle.util.io.pem.PemWriter;
+import sun.security.ec.ECPrivateKeyImpl;
 import sun.security.ec.ECPublicKeyImpl;
 import sun.security.provider.DSAPublicKeyImpl;
 import sun.security.rsa.RSAPublicKeyImpl;
@@ -43,6 +51,7 @@ import static gui.GuiInterfaceV1.reportError;
 
 public class MyCode extends x509.v3.CodeV3 {
 
+    private PKCS10CertificationRequest csr;
     private static  KeyStore ks;
     private static final String pass = "root";
     private static final String file_to_store_ks = "mojaRadnja.p12";
@@ -144,14 +153,15 @@ public class MyCode extends x509.v3.CodeV3 {
                 DSAPublicKeyImpl dsa_alg = (DSAPublicKeyImpl) certificate.getPublicKey();
                 access.setPublicKeyParameter(String.valueOf(dsa_alg.getY().bitLength()));
             }
-
+            //todo or like this??? ECPrivateKeyImpl ecPrivateKey = (ECPrivateKeyImpl) keyStore.getKey(s, password);
+            //                    ECParameterSpec ecParameterSpec = ecPrivateKey.getParams();
             if (alg == "EC") {
                 ECPublicKeyImpl ec_alg = (ECPublicKeyImpl) certificate.getPublicKey();
                 access.setPublicKeyECCurve(String.valueOf(ec_alg.getParams().getCurve()));
                 access.setPublicKeyParameter(String.valueOf(ec_alg.getParams()));
             }
 
-
+            //TODO izgleda da sam obrnuo load i save keypair (vidi Critical)
             //VERSION 3 EXTENSIONS
             if (certificate.getVersion() == 3) {
 
@@ -448,17 +458,59 @@ public class MyCode extends x509.v3.CodeV3 {
 
     @Override
     public boolean exportCSR(String s, String s1, String s2) {
+        try(FileWriter fileWriter = new FileWriter(s)) {
 
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(s1);
+
+            JcaPKCS10CertificationRequestBuilder jcaPKCS10CertificationRequestBuilder = new JcaPKCS10CertificationRequestBuilder(
+                    certificate.getSubjectX500Principal(),
+                    certificate.getPublicKey()
+            );
+            JcaContentSignerBuilder jcaContentSignerBuilder = new JcaContentSignerBuilder(s2);
+            ContentSigner contentSigner = jcaContentSignerBuilder.build((PrivateKey) ks.getKey(s, pass.toCharArray()));
+            PKCS10CertificationRequest csr = jcaPKCS10CertificationRequestBuilder.build(contentSigner);
+
+            JcaPEMWriter jcaPEMWriter = new JcaPEMWriter(fileWriter);
+            jcaPEMWriter.writeObject(csr);
+            jcaPEMWriter.close();
+            return true;
+        } catch (IOException | KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException | OperatorCreationException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return false;
     }
 
     @Override
     public String importCSR(String s) {
+
+        try (FileReader fileReader = new FileReader(s)){
+
+            PemReader pemReader = new PemReader(fileReader);
+            PEMParser pemParser = new PEMParser(pemReader);
+            PKCS10CertificationRequest csr = (PKCS10CertificationRequest) pemParser.readObject();
+            this.csr = csr;
+            return csr.getSubject().toString();
+            //todo might need to reformat final string for GUI purposes
+        } catch (IOException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return null;
     }
 
     @Override
-    public boolean signCSR(String s, String s1, String s2) {
+    public boolean signCSR(String file, String alias, String algorithm) {
+        try(FileWriter fileWriter = new FileWriter(file)) {
+
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(alias);
+            PublicKey publicKey = certificate.getPublicKey();
+            PrivateKey privateKey;
+
+        } catch (IOException | KeyStoreException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return false;
     }
 
@@ -469,21 +521,75 @@ public class MyCode extends x509.v3.CodeV3 {
 
     @Override
     public boolean canSign(String s) {
+        try {
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
+            if ( certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal())){
+                Set<String> criticalExtensionOIDs = certificate.getCriticalExtensionOIDs();
+                for (String oid : criticalExtensionOIDs) {
+                    if (oid == org.bouncycastle.asn1.x509.Extension.basicConstraints.toString()) {
+                        byte[] extensionValue = certificate.getExtensionValue("2.5.29.19");
+                        if (extensionValue != null) {
+                            byte[] subjectOctets = ASN1OctetString.getInstance(extensionValue).getOctets();
+                            BasicConstraints basicConstraints = BasicConstraints.getInstance(subjectOctets);
+                            if (basicConstraints.isCA()) {
+                                return true;
+                            } else {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return false;
     }
 
     @Override
     public String getSubjectInfo(String s) {
+        try {
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
+            X509CertificateHolder certificateHolder = new X509CertificateHolder(org.bouncycastle.asn1.x509.Certificate.getInstance(certificate));
+            //certificate.getSubjectPrincipal.getName - also an option
+            return certificateHolder.getSubject().toString() + "," + "SA=" + certificateHolder.getSignatureAlgorithm().toString();
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return null;
     }
 
     @Override
     public String getCertPublicKeyAlgorithm(String s) {
+        try {
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
+            return certificate.getPublicKey().getAlgorithm();
+        } catch (KeyStoreException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return null;
     }
 
     @Override
     public String getCertPublicKeyParameter(String s) {
+        try {
+            X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
+            PublicKey publicKey = certificate.getPublicKey();
+            if (publicKey instanceof DSAPublicKey)
+                return String.valueOf(((DSAPublicKey) publicKey).getY().bitLength());
+            else if (publicKey instanceof RSAPublicKey) {
+                return String.valueOf(((RSAPublicKey) publicKey).getModulus().bitLength());
+            } else {
+                ECPrivateKeyImpl ecPrivateKey = (ECPrivateKeyImpl) ks.getKey(s, pass.toCharArray()); //private or public
+                return ecPrivateKey.getParams().getCurve().toString();
+            }
+        } catch (KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return null;
     }
 }
