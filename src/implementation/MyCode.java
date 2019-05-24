@@ -29,7 +29,9 @@ import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.cms.*;
 import org.bouncycastle.jce.ECNamedCurveTable;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMParser;
@@ -40,6 +42,9 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.pkcs.PKCS10CertificationRequest;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequest;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
+import org.bouncycastle.util.CollectionStore;
+import org.bouncycastle.util.Selector;
+import org.bouncycastle.util.Store;
 import org.bouncycastle.util.io.pem.PemReader;
 import org.bouncycastle.util.io.pem.PemWriter;
 import sun.security.ec.ECPrivateKeyImpl;
@@ -501,13 +506,40 @@ public class MyCode extends x509.v3.CodeV3 {
 
     @Override
     public boolean signCSR(String file, String alias, String algorithm) {
-        try(FileWriter fileWriter = new FileWriter(file)) {
+        try(FileOutputStream fos = new FileOutputStream(file)) {
 
-            X509Certificate certificate = (X509Certificate) ks.getCertificate(alias);
-            PublicKey publicKey = certificate.getPublicKey();
-            PrivateKey privateKey;
+            //prepare for making a certificate
+            BigInteger serialNumber = BigInteger.valueOf(Long.parseLong(access.getSerialNumber()));
+            Date notBefore = access.getNotBefore();
+            Date notAfter = access.getNotAfter();
+            X509Certificate issuerCert = (X509Certificate) ks.getCertificate(alias);
+            X500Name issuerName = X500Name.getInstance(issuerCert.getSubjectX500Principal().getName()); //might be bad
+            X500Name subjectName = this.csr.getSubject();
+            SubjectPublicKeyInfo subjectPublicKeyInfo = this.csr.getSubjectPublicKeyInfo();
 
-        } catch (IOException | KeyStoreException e) {
+            //make a certificate
+            X509v3CertificateBuilder certificateBuilder = new X509v3CertificateBuilder(issuerName, serialNumber, notBefore, notAfter, subjectName, subjectPublicKeyInfo);
+            //TODO check critical and add extensions
+
+            //pkcs7
+            JcaContentSignerBuilder jcaContentSignerBuilder = new JcaContentSignerBuilder(algorithm);
+            PrivateKey privateKey = (PrivateKey) ks.getKey(alias,pass.toCharArray());
+            ContentSigner contentSigner = jcaContentSignerBuilder.build(privateKey);
+            X509Certificate certificate = new JcaX509CertificateConverter().getCertificate(certificateBuilder.build(contentSigner));
+
+            CMSSignedDataGenerator cmsSignedDataGenerator = new CMSSignedDataGenerator();
+            List<JcaX509CertificateHolder> certificateChain = new ArrayList<>();
+            CMSTypedData cmsTypedData = new CMSProcessableByteArray(certificate.getEncoded());
+            certificateChain.add(new JcaX509CertificateHolder(certificate));
+            for(Certificate c :  ks.getCertificateChain(alias)) {
+                certificateChain.add(new JcaX509CertificateHolder((X509Certificate) c));
+            }
+            cmsSignedDataGenerator.addCertificates(new CollectionStore(certificateChain));
+            CMSSignedData cmsSignedData = cmsSignedDataGenerator.generate(cmsTypedData);
+            fos.write(cmsSignedData.getEncoded());
+            return true;
+
+        } catch (IOException | KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException | OperatorCreationException | CertificateException | CMSException e) {
             e.printStackTrace();
             reportError(e);
         }
@@ -515,7 +547,27 @@ public class MyCode extends x509.v3.CodeV3 {
     }
 
     @Override
-    public boolean importCAReply(String s, String s1) {
+    public boolean importCAReply(String file, String alias) {
+        try (FileInputStream fis = new FileInputStream(file)) {
+            CMSSignedData cmsSignedData = new CMSSignedData(fis);
+            Store<X509CertificateHolder> certificateHolderStore = cmsSignedData.getCertificates();
+            Collection<X509CertificateHolder> collection = certificateHolderStore.getMatches(null);
+            X509CertificateHolder[] array = (X509CertificateHolder[]) collection.toArray();
+            X509Certificate[] certificateChain = new X509Certificate[array.length];
+            for (int i = 0; i<array.length; i++) {
+                certificateChain[i] = new JcaX509CertificateConverter().getCertificate(array[i]);
+            }
+
+            PrivateKey privateKey = (PrivateKey) ks.getKey(alias, pass.toCharArray());
+            ks.setKeyEntry(alias, privateKey, pass.toCharArray(), certificateChain);
+
+            updateKeyStoreFile();
+            return true;
+
+        } catch (IOException | CMSException | CertificateException | KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException e) {
+            e.printStackTrace();
+            reportError(e);
+        }
         return false;
     }
 
