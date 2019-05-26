@@ -20,6 +20,8 @@ import gui.Constants;
 import gui.GuiInterfaceV1;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
+import org.bouncycastle.asn1.DERGeneralString;
+import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.pkcs.RSAPublicKey;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.X500NameBuilder;
@@ -27,9 +29,11 @@ import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.X509ExtensionUtils;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.cms.*;
 import org.bouncycastle.jce.ECNamedCurveTable;
@@ -166,7 +170,8 @@ public class MyCode extends x509.v3.CodeV3 {
                 access.setPublicKeyParameter(String.valueOf(ec_alg.getParams()));
             }
 
-            //TODO izgleda da sam obrnuo load i save keypair (vidi Critical)
+            int ret = 1;
+
             //VERSION 3 EXTENSIONS
             if (certificate.getVersion() == 3) {
 
@@ -175,23 +180,24 @@ public class MyCode extends x509.v3.CodeV3 {
                 access.setCritical(Constants.SKID, false);
                 access.setCritical(Constants.SDA, false);
                 Set<String> criticalExtensionOIDs = certificate.getCriticalExtensionOIDs();
-                for (String oid : criticalExtensionOIDs) {
+                if (criticalExtensionOIDs != null) {
+                    for (String oid : criticalExtensionOIDs) {
 
-                    if (oid == org.bouncycastle.asn1.x509.Extension.basicConstraints.toString()) {
-                        access.setCritical(Constants.BC, true);
-                    }
+                        if (oid == org.bouncycastle.asn1.x509.Extension.basicConstraints.toString()) {
+                            access.setCritical(Constants.BC, true);
+                        }
 
-                    if (oid == org.bouncycastle.asn1.x509.Extension.subjectKeyIdentifier.toString()) {
-                        access.setCritical(Constants.SKID, true);
-                    }
+                        if (oid == org.bouncycastle.asn1.x509.Extension.subjectKeyIdentifier.toString()) {
+                            access.setCritical(Constants.SKID, true);
+                        }
 
-                    if (oid == org.bouncycastle.asn1.x509.Extension.subjectDirectoryAttributes.toString()) {
-                        access.setCritical(Constants.SDA, true);
+                        if (oid == org.bouncycastle.asn1.x509.Extension.subjectDirectoryAttributes.toString()) {
+                            access.setCritical(Constants.SDA, true);
+                        }
+
                     }
 
                 }
-
-
                 //basic constraints
                 byte[] extensionValue2 = certificate.getExtensionValue("2.5.29.19");
                 if (extensionValue2 != null) {
@@ -199,6 +205,9 @@ public class MyCode extends x509.v3.CodeV3 {
                     BasicConstraints basicConstraints = BasicConstraints.getInstance(subjectOctets2);
                     access.setPathLen(String.valueOf(basicConstraints.getPathLenConstraint()));
                     access.setCA(basicConstraints.isCA());
+                    if (basicConstraints.isCA()){
+                        ret = 2;
+                    }
                 }
 
 
@@ -220,30 +229,29 @@ public class MyCode extends x509.v3.CodeV3 {
                     byte[] subjectOctets1 = ASN1OctetString.getInstance(extensionValue1).getOctets();
                     SubjectDirectoryAttributes subjectDirectoryAttributes = SubjectDirectoryAttributes.getInstance(subjectOctets1);
 
-                    //TODO ne znam sta ispisuje subjectDirectoryAttriutes vektor, pa kad to proverim mozemo popuniti polja
-                    Vector v = subjectDirectoryAttributes.getAttributes();
-//                    for (Object s123 : v) {
-//                        System.out.println(
-//                                s123
-//                        );
-//                    }
-                }
-//                access.setSubjectDirectoryAttribute(Constants.POB, subjectDirectoryAttributes.getAttributes()); //Place of birth
-//                access.setSubjectDirectoryAttribute(Constants.COC, String v); //Country of citizenship
-//               access.setGender();
-//                access.setDateOfBirth();
+                    Vector<Attribute> v = subjectDirectoryAttributes.getAttributes();
+                    for (Attribute attribute : v) {
+                        ASN1ObjectIdentifier attrType = attribute.getAttrType();
+                        String attrValue = attribute.getAttrValues().toString();
+                        if (attrType == BCStyle.PLACE_OF_BIRTH) access.setSubjectDirectoryAttribute(Constants.POB, attrValue);
+                        else if (attrType == BCStyle.COUNTRY_OF_CITIZENSHIP) access.setSubjectDirectoryAttribute(Constants.COC, attrValue);
+                        else if (attrType == BCStyle.GENDER) access.setGender(attrValue); else access.setDateOfBirth(attrValue);
 
+                    }
+                }
 
             }
 
-            return 0;
-            //TODO return
+            if (certificate.getSubjectDN() == certificate.getIssuerDN()) {
+                ret = 0;
+            }
+
+            return ret;
 
         } catch (KeyStoreException e) {
             e.printStackTrace();
             reportError(e);
         }
-
 
         return -1;
     }
@@ -259,7 +267,7 @@ public class MyCode extends x509.v3.CodeV3 {
             //publicKeyInfo
             KeyPair keyPair = keyPairGenerator.generateKeyPair();
             PrivateKey privateKey = keyPair.getPrivate();
-            PublicKey subjectPublicKeyInfo = keyPair.getPublic();
+            PublicKey subjectPublicKey = keyPair.getPublic();
 
             //subject
             X500NameBuilder x500NameBuilder = new X500NameBuilder();
@@ -277,7 +285,7 @@ public class MyCode extends x509.v3.CodeV3 {
             Date notAfter = access.getNotAfter();
 
             //Serial Number
-            BigInteger serialNumber = BigInteger.valueOf(Long.parseLong(access.getSerialNumber()));
+            BigInteger serialNumber = new BigInteger(access.getSerialNumber());
 
 
             X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
@@ -286,33 +294,52 @@ public class MyCode extends x509.v3.CodeV3 {
                    notBefore,
                    notAfter,
                    subject,
-                   subjectPublicKeyInfo
+                   subjectPublicKey
             );
 
             if (access.getVersion() == Constants.V3) {
-                access.setCritical(Constants.BC, false);
-                access.setCritical(Constants.SKID, false);
-                access.setCritical(Constants.SDA, false);
+
 
                 //basic constraints
-                BasicConstraints basicConstraints = new BasicConstraints(Integer.parseInt(access.getPathLen()));
-                certificateBuilder.addExtension(Extension.basicConstraints, access.isCritical(Constants.BC), basicConstraints.getEncoded());
-
+                if (!access.getPathLen().isEmpty()) {
+                    BasicConstraints basicConstraints;
+                    if (access.isCA()) {
+                        basicConstraints = new BasicConstraints(Integer.parseInt(access.getPathLen()));
+                    } else {
+                        basicConstraints = new BasicConstraints(access.isCA());
+                    }
+                    certificateBuilder.addExtension(Extension.basicConstraints, access.isCritical(Constants.BC), basicConstraints.getEncoded());
+                }
 
                 //subject key identifier
                 if (access.getEnabledSubjectKeyID()) {
-                    SubjectKeyIdentifier subjectKeyIdentifier = new SubjectKeyIdentifier(subjectPublicKeyInfo.getEncoded());
+                    SubjectKeyIdentifier subjectKeyIdentifier = new JcaX509ExtensionUtils().createSubjectKeyIdentifier(subjectPublicKey);
                     certificateBuilder.addExtension(Extension.subjectKeyIdentifier, access.isCritical(Constants.SKID), subjectKeyIdentifier.getEncoded());
                 }
 
                 //subject directory attributes
-                Vector v = new Vector();
-                v.add(access.getSubjectDirectoryAttribute(Constants.POB));
-                v.add(access.getSubjectDirectoryAttribute(Constants.COC));
-                v.add(access.getGender());
-                v.add(access.getDateOfBirth());
-                SubjectDirectoryAttributes subjectDirectoryAttributes = new SubjectDirectoryAttributes(v);
-                certificateBuilder.addExtension(Extension.subjectDirectoryAttributes, access.isCritical(Constants.SDA), subjectDirectoryAttributes.getEncoded());
+                String dateOfBirth = access.getDateOfBirth();
+                String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
+                String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
+                String gender = access.getGender();
+
+                Vector<Attribute> attributes = new Vector<>();
+
+                if (dateOfBirth.length() > 0)
+                    attributes.add(new Attribute(BCStyle.DATE_OF_BIRTH, new DERSet(new DERGeneralString(dateOfBirth))));
+
+                if (placeOfBirth.length() > 0)
+                    attributes.add(new Attribute(BCStyle.PLACE_OF_BIRTH, new DERSet(new DERGeneralString(placeOfBirth))));
+
+                if (countryOfCitizenship.length() > 0)
+                    attributes.add(new Attribute(BCStyle.COUNTRY_OF_CITIZENSHIP, new DERSet(new DERGeneralString(countryOfCitizenship))));
+
+                if (gender.length() > 0)
+                    attributes.add(new Attribute(BCStyle.GENDER, new DERSet(new DERGeneralString(gender))));
+                if (attributes.size() > 0) {
+                    SubjectDirectoryAttributes subjectDirectoryAttributes = new SubjectDirectoryAttributes(attributes);
+                    certificateBuilder.addExtension(Extension.subjectDirectoryAttributes, access.isCritical(Constants.SDA), subjectDirectoryAttributes.getEncoded());
+                }
             }
 
             JcaContentSignerBuilder jcaContentSignerBuilder = new JcaContentSignerBuilder(access.getPublicKeyDigestAlgorithm());
@@ -519,9 +546,49 @@ public class MyCode extends x509.v3.CodeV3 {
 
             //make a certificate
             X509v3CertificateBuilder certificateBuilder = new X509v3CertificateBuilder(issuerName, serialNumber, notBefore, notAfter, subjectName, subjectPublicKeyInfo);
-            //TODO check critical and add extensions
+            //basic constraints
+            if (!access.getPathLen().isEmpty()) {
+                BasicConstraints basicConstraints;
+                if (access.isCA()) {
+                    basicConstraints = new BasicConstraints(Integer.parseInt(access.getPathLen()));
+                } else {
+                    basicConstraints = new BasicConstraints(access.isCA());
+                }
+                certificateBuilder.addExtension(Extension.basicConstraints, access.isCritical(Constants.BC), basicConstraints.getEncoded());
+            }
 
-            //pkcs7
+            //subject key identifier
+            if (access.getEnabledSubjectKeyID()) {
+                SubjectKeyIdentifier subjectKeyIdentifier = new JcaX509ExtensionUtils().createSubjectKeyIdentifier(subjectPublicKeyInfo);
+                certificateBuilder.addExtension(Extension.subjectKeyIdentifier, access.isCritical(Constants.SKID), subjectKeyIdentifier.getEncoded());
+            }
+
+            //subject directory attributes
+            String dateOfBirth = access.getDateOfBirth();
+            String placeOfBirth = access.getSubjectDirectoryAttribute(Constants.POB);
+            String countryOfCitizenship = access.getSubjectDirectoryAttribute(Constants.COC);
+            String gender = access.getGender();
+
+            Vector<Attribute> attributes = new Vector<>();
+
+            if (dateOfBirth.length() > 0)
+                attributes.add(new Attribute(BCStyle.DATE_OF_BIRTH, new DERSet(new DERGeneralString(dateOfBirth))));
+
+            if (placeOfBirth.length() > 0)
+                attributes.add(new Attribute(BCStyle.PLACE_OF_BIRTH, new DERSet(new DERGeneralString(placeOfBirth))));
+
+            if (countryOfCitizenship.length() > 0)
+                attributes.add(new Attribute(BCStyle.COUNTRY_OF_CITIZENSHIP, new DERSet(new DERGeneralString(countryOfCitizenship))));
+
+            if (gender.length() > 0)
+                attributes.add(new Attribute(BCStyle.GENDER, new DERSet(new DERGeneralString(gender))));
+            if (attributes.size() > 0) {
+                SubjectDirectoryAttributes subjectDirectoryAttributes = new SubjectDirectoryAttributes(attributes);
+                certificateBuilder.addExtension(Extension.subjectDirectoryAttributes, access.isCritical(Constants.SDA), subjectDirectoryAttributes.getEncoded());
+            }
+
+
+        //pkcs7
             JcaContentSignerBuilder jcaContentSignerBuilder = new JcaContentSignerBuilder(algorithm);
             PrivateKey privateKey = (PrivateKey) ks.getKey(alias,pass.toCharArray());
             ContentSigner contentSigner = jcaContentSignerBuilder.build(privateKey);
@@ -577,16 +644,18 @@ public class MyCode extends x509.v3.CodeV3 {
             X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
             if ( certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal())){
                 Set<String> criticalExtensionOIDs = certificate.getCriticalExtensionOIDs();
-                for (String oid : criticalExtensionOIDs) {
-                    if (oid == org.bouncycastle.asn1.x509.Extension.basicConstraints.toString()) {
-                        byte[] extensionValue = certificate.getExtensionValue("2.5.29.19");
-                        if (extensionValue != null) {
-                            byte[] subjectOctets = ASN1OctetString.getInstance(extensionValue).getOctets();
-                            BasicConstraints basicConstraints = BasicConstraints.getInstance(subjectOctets);
-                            if (basicConstraints.isCA()) {
-                                return true;
-                            } else {
-                                return false;
+                if (criticalExtensionOIDs != null) {
+                    for (String oid : criticalExtensionOIDs) {
+                        if (oid == org.bouncycastle.asn1.x509.Extension.basicConstraints.toString()) {
+                            byte[] extensionValue = certificate.getExtensionValue("2.5.29.19");
+                            if (extensionValue != null) {
+                                byte[] subjectOctets = ASN1OctetString.getInstance(extensionValue).getOctets();
+                                BasicConstraints basicConstraints = BasicConstraints.getInstance(subjectOctets);
+                                if (basicConstraints.isCA()) {
+                                    return true;
+                                } else {
+                                    return false;
+                                }
                             }
                         }
                     }
