@@ -779,10 +779,11 @@ public class MyCode extends x509.v3.CodeV3 {
             System.out.println("getCertPublicKeyParameter");
             X509Certificate certificate = (X509Certificate) ks.getCertificate(s);
             PublicKey publicKey = certificate.getPublicKey();
-            if (publicKey instanceof DSAPublicKey)
+            if (publicKey.getAlgorithm() == "DSA")
                 return String.valueOf(((DSAPublicKey) publicKey).getY().bitLength());
-            else if (publicKey instanceof RSAPublicKey) {
-                return String.valueOf(((RSAPublicKey) publicKey).getModulus().bitLength());
+            else if (publicKey.getAlgorithm() == "RSA") {
+                java.security.interfaces.RSAPublicKey rsaPublicKey = (java.security.interfaces.RSAPublicKey) publicKey;
+                return String.valueOf(((rsaPublicKey.getModulus().bitLength())));
             } else {
                 ECPrivateKeyImpl ecPrivateKey = (ECPrivateKeyImpl) ks.getKey(s, pass.toCharArray()); //private or public
                 return ecPrivateKey.getParams().getCurve().toString();

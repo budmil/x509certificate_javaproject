@@ -1,3 +1,4 @@
+RSA
 EC
 subject key identifier
 subject directory attributes
